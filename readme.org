@@ -1,0 +1,19 @@
+#+STARTUP: showall
+#+TODO: TODO IN-PROGRESS BLOCKED | DONE CANCELED
+
+* DONE find matching .rtext
+** DONE find all rtext-files
+** DONE extract pattern + commands
+** DONE convert glob pattern to elisp regexp
+transform glob-pattern to emacs regexp "*" -> ".*" "." -> "\\."
+** DONE match filename to pattern
+* TODO spawn rtext-process
+* TODO get socket port from spawned process
+* TODO keep track of mapping of .rtext + ending to process and communication socket
+* TODO send context-data to server
+* TODO parse result
+* TODO show completion results as completion UI
+* TODO show error results as clickable error buffer
+* TODO show error results in different font
+* TODO implement syntax highlighting
+C-h v font-lock-keywords in xml-mode shows implementation of nxml

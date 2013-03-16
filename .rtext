@@ -1,0 +1,4 @@
+*.test:
+command1
+*.test2:
+command2
