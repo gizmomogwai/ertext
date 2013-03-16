@@ -2,3 +2,7 @@
 command1
 *.test2:
 command2
+*.rtest:
+ruby ./test.rb
+*.rtext-process:
+ruby -I../rgen/lib -I../rtext/lib ../rtext/test/integration/ecore_editor.rb "*.ect"

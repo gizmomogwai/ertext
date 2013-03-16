@@ -3,6 +3,11 @@
 ;;(require 'ertext)
 (require 'ert-expectations)
 
+(defvar ertext/service-regex "RText service, listening on port \\(.*\\)\n"
+  "Regex used for finding the communication port of a RText service.")
+(defvar ertext/glob-command-regex "\\(.*\\):\n\\(.*\\)\n"
+  "Regex used to process .rtext files.")
+
 (defun ertext/parent-directory(directory)
   "Return the parent directory of DIRECTORY."
   (file-name-directory (directory-file-name directory)))
@@ -10,6 +15,7 @@
 (defun ertext/find-matching-rtext-file
   (filename exists-p matches &optional path)
   "Return the rtextfile and the command from the first matching .rtext file for FILENAME or nil.
+
 
 The first matching file is an existing .rtext file in FILENAME's directory hierarchie, that has a command associated with FILENAME. EXISTS-P and MATCHES are used to analyze this. EXISTS-P is usually just `file-exists-p', MATCHES has to open the file and check if it contains a matching pattern and return the associated command."
   (let* ((current-dir (expand-file-name (if path path (file-name-directory filename))))
@@ -78,7 +84,6 @@ Pairs is a list of regexp strings and commands."
     (if (ertext/string-match-fully-p (ertext/glob-pattern-to-regexp (car head)) text)
         (return (second head)))))
 
-(setq ertext/glob-command-regex "\\(.*\\):\n\\(.*\\)\n")
 
 (defun ertext/glob-pattern-command-matcher-with-file (pattern-command-file filename)
   "Return a matching command from PATTERN-COMMAND-FILE for FILENAME or nil."
@@ -89,6 +94,20 @@ Pairs is a list of regexp strings and commands."
   "Return rtext-file and command for FILENAME or nil."
   (ertext/find-matching-rtext-file filename (function file-exists-p) (function ertext/glob-pattern-command-matcher-with-file)))
 
+(defun ertext/start-rtext-process (command)
+  "Return the port of the launched rText process given by COMMAND."
+  (let* ((process-connection-type nil)
+         (buffer-name (generate-new-buffer "ertext"))
+         (process (apply 'start-process (append (list "ertext" buffer-name) (split-string command)))))
+    (accept-process-output process 1 nil t)
+    (list process
+          (let* ((string (with-current-buffer buffer-name (buffer-string)))
+                 (bummer (string-match ertext/service-regex string))
+                 (match (match-string 1 string))
+                 (res (if match (string-to-number match) nil)))
+            res))))
+
+(string-match "a" "b")
 (expectations
   (defun my-rtext-exists-p (filename) (string= "/my/.rtext" filename))
   (defun my-rtext-match-p (rtext-config filename) 1)
@@ -165,18 +184,33 @@ Pairs is a list of regexp strings and commands."
 
   )
 
+(defun handle-server-reply (process content)
+   "Gets invoked whenever the server sends data to the client."
+   (message "%S -> %S" process content)
+   )
+(defun ertext/connect-to-service (port)
+  "Connect to a RText service that is listening on PORT."
+  (message "connecting to %S" port)
+  (let* ((buffer-name (generate-new-buffer "ertext-connection"))
+         (process (open-network-stream "ertext-connection" nil "localhost" port '(:nowait t))))
+    (set-process-filter-multibyte process t)
+    (set-process-coding-system process 'utf-8 'utf-8)
+    (set-process-filter process 'handle-server-reply)
+    process))
+
 (defun ertext/connect-to-rtext-process (filename)
+  "Launch the defined command for FILENAME."
+  (let ((rtext-and-command (ertext/get-rtext-and-command filename)))
+    (if rtext-and-command
+        (let* ((process-and-port (ertext/start-rtext-process (second rtext-and-command)))
+               (port (second process-and-port)))
+          (if port (ertext/connect-to-service port))))))
+
+(setq h (ertext/connect-to-rtext-process "./test.rtext-process"))
+(accept-process-output h 1)
 
 (defun ertext/process-output-filter (process string)
   "Process output from all rtext processes."
   (message "%S -> %S" process string))
-
-(setq h
-      (let* ((process-connection-type nil)
-             (buffer-name (generate-new-buffer "ertext"))
-             (process (start-process "ertext" buffer-name "ruby" "./test.rb" "1" "2" "3")))
-;;        (set-process-filter process (function ertext/process-output-filter))
-        (accept-process-output process 0.1 nil t)
-        process))
 
 (mapc #'delete-process (process-list))
