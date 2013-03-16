@@ -12,8 +12,7 @@
   "Return the rtextfile and the command from the first matching .rtext file for FILENAME or nil.
 
 The first matching file is an existing .rtext file in FILENAME's directory hierarchie, that has a command associated with FILENAME. EXISTS-P and MATCHES are used to analyze this. EXISTS-P is usually just `file-exists-p', MATCHES has to open the file and check if it contains a matching pattern and return the associated command."
-  (message "%S %S %S %S" filename exists-p matches path)
-  (let* ((current-dir (if path path (file-name-directory filename)))
+  (let* ((current-dir (expand-file-name (if path path (file-name-directory filename))))
          (rtext-file-name (expand-file-name ".rtext" current-dir))
          (rtext-exists (funcall exists-p rtext-file-name))
          (finished (and rtext-exists (funcall matches rtext-file-name filename))))
@@ -86,6 +85,10 @@ Pairs is a list of regexp strings and commands."
   (let* ((pairs (ertext/map-regex-with-file "./.rtext" ertext/glob-command-regex (function ertext/extract-first-and-second-from-match))))
     (ertext/glob-pattern-command-matcher pairs filename)))
 
+(defun ertext/get-rtext-and-command (filename)
+  "Return rtext-file and command for FILENAME or nil."
+  (ertext/find-matching-rtext-file filename (function file-exists-p) (function ertext/glob-pattern-command-matcher-with-file)))
+
 (expectations
   (defun my-rtext-exists-p (filename) (string= "/my/.rtext" filename))
   (defun my-rtext-match-p (rtext-config filename) 1)
@@ -148,6 +151,12 @@ Pairs is a list of regexp strings and commands."
   (desc "get rtextfile and command for filename")
   (expect (list (expand-file-name "./.rtext") "command2") (ertext/find-matching-rtext-file "./blub.test2" (function file-exists-p) (function ertext/glob-pattern-command-matcher-with-file)))
 
+  (desc "convinient get rtextfile and command")
+  (expect (list (expand-file-name "./.rtext") "command2") (ertext/get-rtext-and-command "./blub.test3"))
+
+  (desc "convinient get rtextfile and command -> nil")
+  (expect nil (ertext/get-rtext-and-command "./blub.test3"))
+
   (desc "string-match-fully-p matches")
   (expect t (ertext/string-match-fully-p "abc" "abc"))
 
@@ -156,6 +165,7 @@ Pairs is a list of regexp strings and commands."
 
   )
 
+(defun ertext/connect-to-rtext-process (filename)
 
 (defun ertext/process-output-filter (process string)
   "Process output from all rtext processes."
