@@ -155,3 +155,18 @@ Pairs is a list of regexp strings and commands."
   (expect nil (ertext/string-match-fully-p "abc" "abcd"))
 
   )
+
+
+(defun ertext/process-output-filter (process string)
+  "Process output from all rtext processes."
+  (message "%S -> %S" process string))
+
+(setq h
+      (let* ((process-connection-type nil)
+             (buffer-name (generate-new-buffer "ertext"))
+             (process (start-process "ertext" buffer-name "ruby" "./test.rb" "1" "2" "3")))
+;;        (set-process-filter process (function ertext/process-output-filter))
+        (accept-process-output process 0.1 nil t)
+        process))
+
+(mapc #'delete-process (process-list))
