@@ -1,0 +1,6 @@
+Command 1 {
+Command 3 {
+Command 6 {
+role2:
+Command 8 {
+      }

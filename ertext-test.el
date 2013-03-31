@@ -18,8 +18,9 @@
   "The global invocation id shared for all RText connections.")
 (defvar ertext/json-header "^\\([0-9]+\\){"
   "Regex to parse answers from the server.")
-(defvar ertext/process-to-output '()
-  "Maps processes to output from processed.")
+
+(defconst ertext/process-data-key "data")
+(defconst ertext/process-callback-key "callback")
 
 (defun ertext/parent-directory(directory)
   "Return the parent directory of DIRECTORY."
@@ -119,12 +120,55 @@ Pairs is a list of regexp strings and commands."
   (let* ((match (string-match ertext/json-header string))
          (json-length (if match (string-to-number (match-string 1 string))))
          (header-length (if match (match-end 1)))
-         (minimum-length (+ json-length header-length))
-         (json (if (>= (length string) minimum-length)
-                   (substring string header-length minimum-length))))
-    (condition-case nil
-        (json-read-from-string json)
-      (error nil))))
+         (minimum-length (+ json-length header-length)))
+    (if (>= (length string) minimum-length)
+        (list (substring string header-length minimum-length) (substring string minimum-length))
+      nil)))
+
+(defun ertext/protocol-get-json (string)
+  "Like `ertext/protocol-get-json-data' but the json-data is parsed."
+  (let* ((help (ertext/protocol-get-json-data string))
+         (json (if help (json-read-from-string (car help))))
+         (res (if json (list json (second help)))))
+    res))
+
+(defun ertext/protocol-collect-and-process-output (process content)
+  "Gets invoked whenever the server sends data to the client.
+It collects the data and checks if enough data for a package of the
+RText-Protocol is received. Then it calls the callback, that is
+associated with process."
+  (process-put process ertext/process-data-key (concat (process-get process ertext/process-data-key) content))
+  (let ((json-and-data (ertext/protocol-get-json (process-get process ertext/process-data-key))))
+    (if json-and-data
+        (progn
+          (process-put process ertext/process-data-key (second json-and-data))
+          (funcall (process-get process ertext/process-callback-key) process (car json-and-data))))))
+
+(defun ertext/protocol-json-response-received (process json)
+  "Called whenever a json response is received."
+  (message "%S got %S" process json))
+
+(defun ertext/connect-to-service (port)
+  "Connect to a RText service that is listening on PORT."
+  (message "connecting to %S" port)
+  (let* ((buffer-name (generate-new-buffer "ertext-connection"))
+         (process (open-network-stream "ertext-connection" nil "localhost" port)))
+    (set-process-filter-multibyte process t)
+    (set-process-coding-system process 'utf-8 'utf-8)
+    (process-put process ertext/process-callback-key 'ertext/protocol-json-response-received)
+    (set-process-filter process 'ertext/protocol-collect-and-process-output)
+;;    (accept-process-output process 1 0 t)
+    process))
+
+(defun ertext/connect-to-rtext-process (filename)
+  "Launch the defined command for FILENAME."
+  (let ((rtext-and-command (ertext/get-rtext-and-command filename)))
+    (if rtext-and-command
+        (let* ((process-and-port (ertext/start-rtext-process (second rtext-and-command)))
+               (port (second process-and-port)))
+          (if port (ertext/connect-to-service port))))))
+
+
 
 (expectations
   (defun my-rtext-exists-p (filename) (string= "/my/.rtext" filename))
@@ -214,69 +258,33 @@ Pairs is a list of regexp strings and commands."
   (desc "connection-get-json-data - not enough data")
   (expect nil (ertext/protocol-get-json-data "3{1"))
 
-  (desc "connection-get-json-data - not enough data")
-  (expect '((\1 . 2)) (ertext/protocol-get-json-data "7{\"1\":2}"))
+  (desc "connection-get-json-data - enough data")
+  (expect '("{\"1\":2}" "") (ertext/protocol-get-json-data "7{\"1\":2}"))
 
-  
+  (desc "connection-get-json-data - too much data")
+  (expect '("{1}" "123") (ertext/protocol-get-json-data "3{1}123"))
+;;  TODO use protocol-get-json-data in protocol-collect-and-process-output
+
+  (desc "connection-get-json - not enough data")
+  (expect nil (ertext/protocol-get-json "3{1"))
+
+  (desc "connection-get-json-data - enough data")
+  (expect '(((\1 . 2)) "") (ertext/protocol-get-json "7{\"1\":2}"))
+
+  (desc "connection-get-json-data - too much data")
+  (expect '(((\1 . 2)) "123") (ertext/protocol-get-json "7{\"1\":2}123"))
+
   )
 
-
-
-(defconst ertext/process-data-key "data")
-
-(defun ertext/protocol-collect-and-process-output (process content)
-  "Gets invoked whenever the server sends data to the client.
-It collects the data and checks if enough data for a package of the 
-RText-Protocol is received. Then it calls the callback, that is 
-associated with process."
-  (process-put process ertext/process-data-key (concat (process-get process ertext/process-data-key) content))
-  (let ((json-data (ertext/get-json-data (process-get process ertext/process-data-key))))
-    (funcall (process-get process ertext/process-callback-key) json-data)))
-
-(defun rtext/protocol-collect-and-process-output (callback process content)
-   "Gets invoked whenever the server sends data to the client."
-   (message "%S -> %S" process content)
-   (rtext/protocol-collect-output process content)
-   (setq ertext/process-to-output
-         (let* ((list ertext/process-to-output)
-                (current (plist-get list process))
-                (new (if current (concat current content) content))
-                (new-list (plist-put list process new)))
-           new-list))
-   (let* ((content (plist-get ertext/process-to-output process))
-          (json-and-header-length (ertext/get-json-length content))
-          (needed-length (apply '+ json-and-header-length))
-          (enough-data (>= (length content) needed-length)))
-     enough-data))
-(setq ertext/process-to-output '())
-
-(defun ertext/connect-to-service (port)
-  "Connect to a RText service that is listening on PORT."
-  (message "connecting to %S" port)
-  (let* ((buffer-name (generate-new-buffer "ertext-connection"))
-         (process (open-network-stream "ertext-connection" nil "localhost" port '(:nowait t))))
-    (set-process-filter-multibyte process t)
-    (set-process-coding-system process 'utf-8 'utf-8)
-    (set-process-filter process 'handle-server-reply)
-;;    (accept-process-output process 1 0 t)
-    process))
-
-(defun ertext/connect-to-rtext-process (filename)
-  "Launch the defined command for FILENAME."
-  (let ((rtext-and-command (ertext/get-rtext-and-command filename)))
-    (if rtext-and-command
-        (let* ((process-and-port (ertext/start-rtext-process (second rtext-and-command)))
-               (port (second process-and-port)))
-          (if port (ertext/connect-to-service port))))))
-
-(setq h (ertext/connect-to-rtext-process "./test.rtext-process"))
-(process-send-string h (let* ((json (json-encode '(("type" . "request") ("invocation_id" . 1) ("command" . "load_model"))))
-                               (length (number-to-string (length json))))
-                          (concat length json)))
-(accept-process-output h 1 0 t)
-(sit-for 1)
-(waiting-for-user-input-p)
-(mapc #'delete-process (process-list))
+;(setq h (ertext/connect-to-rtext-process "./test.rtext-process"))
+;(process-send-string h (let* ((json (json-encode '(("type" . "request") ("invocation_id" . 6) ("command" . "load_model"))))
+;                              (length (number-to-string (length json))))
+;                         (concat length json)))
+;
+;(accept-process-output h 1 0 t)
+;(sit-for 1)
+;(waiting-for-user-input-p)
+;(mapc #'delete-process (process-list))
 
 ;; json tests
 ;;(require 'json)
