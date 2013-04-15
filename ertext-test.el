@@ -1,3 +1,4 @@
+;; TODO beispiel navigate-to erst load-model dann navigate-to und nochmal das mapping pattern + .rtext-file -> process richtig machen
 ;;; -*- lexical-binding: t -*-
 ;;(setq load-path (cons (file-name-directory (buffer-file-name)) load-path))
 ;;(require 'ertext)
@@ -19,6 +20,9 @@
 (defvar ertext/json-header "^\\([0-9]+\\){"
   "Regex to parse answers from the server.")
 
+(defvar ertext/rtextconfig-2-processes-map (make-hash-table :test 'equal)
+  "Maps from rtext config files to created processes")
+
 (defconst ertext/process-data-key "data")
 (defconst ertext/process-callback-key "callback")
 
@@ -28,13 +32,13 @@
 
 (defun ertext/find-matching-rtext-file
   (filename exists-p matches &optional path)
-  "Return the rtextfile and the command from the first matching .rtext file for FILENAME or nil.
+  "Return the rtextfile, the command and the pattern from the first matching .rtext file for FILENAME or nil.
 The first matching file is an existing .rtext file in FILENAME's directory hierarchie, that has a command associated with FILENAME. EXISTS-P and MATCHES are used to analyze this. EXISTS-P is usually just `file-exists-p', MATCHES has to open the file and check if it contains a matching pattern and return the associated command."
   (let* ((current-dir (expand-file-name (if path path (file-name-directory filename))))
          (rtext-file-name (expand-file-name ertext/config-filename current-dir))
          (rtext-exists (funcall exists-p rtext-file-name))
          (finished (and rtext-exists (funcall matches rtext-file-name filename))))
-    (if finished (list rtext-file-name finished)
+    (if finished (list rtext-file-name (first finished) (second finished))
       (let* ((parent-dir (ertext/parent-directory current-dir))
              (new-dir (not (string= parent-dir current-dir))))
         (if new-dir (ertext/find-matching-rtext-file filename exists-p matches (ertext/parent-directory current-dir)) nil)))))
@@ -87,19 +91,19 @@ See `string-match' and `match-string'."
     (if match (eq (match-end 0) (length text)) nil)))
 
 (defun ertext/glob-pattern-command-matcher (pairs text)
-  "Return the matching command for TEXT.
+  "Return the matching pattern and command for TEXT.
 Pairs is a list of regexp strings and commands."
   (dolist (head pairs)
     (if (ertext/string-match-fully-p (ertext/glob-pattern-to-regexp (car head)) text)
-        (return (second head)))))
+        (return head))))
 
 (defun ertext/glob-pattern-command-matcher-with-file (pattern-command-file filename)
   "Return a matching command from PATTERN-COMMAND-FILE for FILENAME or nil."
   (let* ((pairs (ertext/map-regex-with-file ertext/config-filename ertext/glob-command-regex (function ertext/extract-first-and-second-from-match))))
     (ertext/glob-pattern-command-matcher pairs filename)))
 
-(defun ertext/get-rtext-and-command (filename)
-  "Return rtext-file and command for FILENAME or nil."
+(defun ertext/get-rtext-and-pattern-and-command (filename)
+  "Return rtext-file, pattern and command for FILENAME or nil."
   (ertext/find-matching-rtext-file filename (function file-exists-p) (function ertext/glob-pattern-command-matcher-with-file)))
 
 (defun ertext/start-rtext-process (command)
@@ -162,18 +166,19 @@ associated with process."
 
 (defun ertext/connect-to-rtext-process (filename)
   "Launch the defined command for FILENAME."
-  (let ((rtext-and-command (ertext/get-rtext-and-command filename)))
-    (if rtext-and-command
+  (let ((found (ertext/get-rtext-and-pattern-and-command filename))
+        (rtext (first found))
+        (pattern (second found))
+        (command (third found)))
+    (if found
         (let* ((process-and-port (ertext/start-rtext-process (second rtext-and-command)))
                (port (second process-and-port)))
           (if port (ertext/connect-to-service port))))))
 
-
+(defun my-rtext-exists-p (filename) (string= (expand-file-name "/my/very/long/path/.rtext") filename))
+(defun my-rtext-match-p (rtext-config filename) (list "*.test" "command"))
 
 (expectations
-  (defun my-rtext-exists-p (filename) (string= "/my/.rtext" filename))
-  (defun my-rtext-match-p (rtext-config filename) 1)
-
   (desc "directory-file-name gets the filename of a directory")
   (expect "/abc/def" (directory-file-name "/abc/def/"))
 
@@ -188,11 +193,8 @@ associated with process."
   (desc "ertext/parent-directory")
   (expect "/" (ertext/parent-directory "/"))
 
-  (desc "mock")
-  (expect 1 (my-rtext-match-p "123" "123"))
-
   (desc "ertext/find-matching-rtext-file")
-  (expect '("/my/.rtext" 1) (ertext/find-matching-rtext-file "/my/very/long/path/123.txt" (function my-rtext-exists-p) (function my-rtext-match-p)))
+  (expect (list (expand-file-name "/my/very/long/path/.rtext") "*.test" "command") (ertext/find-matching-rtext-file "/my/very/long/path/123.txt" (function my-rtext-exists-p) (function my-rtext-match-p)))
 
   (desc "ertext/map-regex")
   (expect '(("abc" "def")) (ertext/map-regex "abc:\ndef\n" ertext/glob-command-regex (function ertext/extract-first-and-second-from-match)))
@@ -217,31 +219,31 @@ associated with process."
   (expect "a.*b" (ertext/glob-pattern-to-regexp "a*b"))
 
   (desc "glob-pattern-command-matcher")
-  (expect "command1" (ertext/glob-pattern-command-matcher '(("*.text" "command1") ("*.text2" "command2")) "test.text"))
+  (expect (list "*.text" "command1") (ertext/glob-pattern-command-matcher '(("*.text" "command1") ("*.text2" "command2")) "test.text"))
 
   (desc "glob-pattern-command-matcher")
-  (expect "command2" (ertext/glob-pattern-command-matcher '(("*.text" "command1") ("*.text2" "command2")) "test.text2"))
+  (expect (list "*.text2" "command2") (ertext/glob-pattern-command-matcher '(("*.text" "command1") ("*.text2" "command2")) "test.text2"))
 
   (desc "glob-pattern-command-matcher")
   (expect nil (ertext/glob-pattern-command-matcher '(("*.text" "command1") ("*.text2" "command2")) "test.text3"))
 
   (desc "glob-pattern-command-matcher-with-file")
-  (expect "command1" (ertext/glob-pattern-command-matcher-with-file "./.rtext" "test.test"))
+  (expect (list "*.test" "command1") (ertext/glob-pattern-command-matcher-with-file "./.rtext" "test.test"))
 
   (desc "glob-pattern-command-matcher-with-file")
-  (expect "command2" (ertext/glob-pattern-command-matcher-with-file "./.rtext" "test.test2"))
+  (expect (list "*.test2" "command2") (ertext/glob-pattern-command-matcher-with-file "./.rtext" "test.test2"))
 
   (desc "glob-pattern-command-matcher-with-file")
   (expect nil (ertext/glob-pattern-command-matcher-with-file "./.rtext" "test.test3"))
 
   (desc "get rtextfile and command for filename")
-  (expect (list (expand-file-name "./.rtext") "command2") (ertext/find-matching-rtext-file "./blub.test2" (function file-exists-p) (function ertext/glob-pattern-command-matcher-with-file)))
+  (expect (list (expand-file-name "./.rtext") "*.test2" "command2") (ertext/find-matching-rtext-file "./blub.test2" (function file-exists-p) (function ertext/glob-pattern-command-matcher-with-file)))
 
   (desc "convinient get rtextfile and command")
-  (expect (list (expand-file-name "./.rtext") "command2") (ertext/get-rtext-and-command "./blub.test2"))
+  (expect (list (expand-file-name "./.rtext") "*.test2" "command2") (ertext/get-rtext-and-pattern-and-command "./blub.test2"))
 
   (desc "convinient get rtextfile and command -> nil")
-  (expect nil (ertext/get-rtext-and-command "./blub.test3"))
+  (expect nil (ertext/get-rtext-and-pattern-and-command "./blub.test3"))
 
   (desc "string-match-fully-p matches")
   (expect t (ertext/string-match-fully-p "abc" "abc"))
@@ -276,8 +278,28 @@ associated with process."
 
   )
 
-;(setq h (ertext/connect-to-rtext-process "./test.rtext-process"))
-;(process-send-string h (let* ((json (json-encode '(("type" . "request") ("invocation_id" . 6) ("command" . "load_model"))))
+(defun ertext/get-process (buffer)
+  "Return the process responsible for rText for BUFFER"
+  (ertext/connect-to-rtext-process buffer)
+  )
+
+(defun ertext/navigate-to ()
+  "Navigate to the file rText says."
+  (interactive)
+  (let* ((buffer (expand-file-name  (buffer-name)))
+         (line (count-lines 1 (point)))
+         (column (current-column))
+         (process (ertext/get-process buffer))
+         (context (ertext/context/get-from-current-buffer))
+         (json
+          (json-encode (list (cons "type" "request") (cons "invocation_id"  7) (cons "command" "link_targets") (cons "context" context) (cons "column" column)))))
+    (message "Context for %s:%d.%d -> %S\nContext:\n%S\njson:\n%S" buffer line column process context json)
+    (process-send-string process json)))
+
+;(let* ((test "abc") (json (json-encode '(("type" . "request") ("test" . 'test))))) json)
+;
+;;(setq h (ertext/connect-to-rtext-process "./test.rtext-process"))
+;(process-send-string h (let* ((json (json-encode (list (cons "type" "request") (cons "invocation_id" 6) (cons "command" "load_model"))))
 ;                              (length (number-to-string (length json))))
 ;                         (concat length json)))
 ;
@@ -288,11 +310,15 @@ associated with process."
 
 ;; json tests
 ;;(require 'json)
-;;(setq h (json-read-from-string "{\"type\": \"request\",\"command\": \"load_model\"}"))
-;;(cdr (assoc 'command h))
-;;(setq blub "abc")
-;;(json-encode '((1 . 2) ("type" . ("blub1" "blub2"))))
-
+;;(setq h (json-read-from-string "{\"type\": [\"1\", 2, 3],\"command\": \"load_model\"}"))
+;(setq blub "a")
+;(setq h (list (cons "type" blub)))
+;(json-encode  h)
+;(json-read-from-string)
+;;;(cdr (assoc 'command h))
+;;;(setq blub "abc")
+;;;(json-encode '((1 . 2) ("type" . ("blub1" "blub2"))))
+;(apply 'vector (list 1 2 3))
 (defun ertext/process-output-filter (process string)
   "Process output from all rtext processes."
   (message "%S -> %S" process string))

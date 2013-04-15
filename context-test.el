@@ -8,9 +8,9 @@
   (or (eq 0 (length string))
       (eq (elt string 0) ?#)))
 
-(defun ertext/context/remove-ignored-lines (lines)
-  "Remove all ignored lines from the list of lines."
-  (remove-if 'ertext/context/ignore-line-p lines))
+;; (defun ertext/context/remove-ignored-lines (lines)
+;;   "Remove all ignored lines from the list of lines."
+;;   (remove-if 'ertext/context/ignore-line-p lines))
 
 (defun ertext/context/trim (string)
   "Remove whitespace from the start and end of a string."
@@ -18,7 +18,7 @@
 
 (defun ertext/context/split-for-context (string)
   "Split STRING into lines. Use `ertext/context/remove-ignored-lines' to get only real lines."
-  (ertext/context/remove-ignored-lines (split-string string)))
+  (split-string string))
 
 (defun ertext/context/extract-context (lines)
   "Extract the RText specific context from lines."
@@ -63,6 +63,9 @@
         (setq count new-count)))
     res))
 
+(defun ertext/context/split (string)
+  "Return rText style splitted string."
+  (split-string string "\n+"))
 
 ;; testhelper
 (defun ertext/context/get-test-context (n)
@@ -76,6 +79,15 @@
   "Return just the first N elements of list."
   (nbutlast list (- (length list) n)))
 
+
+(defun ertext/context/get-from-current-buffer ()
+  "Return context by using current buffer and position"
+  (interactive)
+  (let ((res nil))
+    (save-excursion
+      (end-of-line)
+      (setq res (buffer-substring-no-properties 1 (point))))
+    (ertext/context/extract-context (split-string res "\n+"))))
 
 (expectations
   (desc "ertext/context/ignore-line-p ignore comment")
