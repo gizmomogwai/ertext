@@ -21,7 +21,7 @@
   "Regex to parse answers from the server.")
 
 (defvar ertext/rtextconfig-2-processes-map (make-hash-table :test 'equal)
-  "Maps from rtext config files to created processes")
+  "Maps from rtext config files to created processes. The key is pattern@full-config-file-path, the values are a hash with keys :socket and :process to process objects.")
 
 (defconst ertext/process-data-key "data")
 (defconst ertext/process-callback-key "callback")
@@ -107,7 +107,7 @@ Pairs is a list of regexp strings and commands."
   (ertext/find-matching-rtext-file filename (function file-exists-p) (function ertext/glob-pattern-command-matcher-with-file)))
 
 (defun ertext/start-rtext-process (command)
-  "Return the port of the launched rText process given by COMMAND."
+  "Return the process and the port of the launched rText process given by COMMAND."
   (let* ((process-connection-type nil)
          (buffer-name (generate-new-buffer "ertext"))
          (process (apply 'start-process (append (list "ertext" buffer-name) (split-string command)))))
@@ -161,19 +161,27 @@ associated with process."
     (set-process-coding-system process 'utf-8 'utf-8)
     (process-put process ertext/process-callback-key 'ertext/protocol-json-response-received)
     (set-process-filter process 'ertext/protocol-collect-and-process-output)
-;;    (accept-process-output process 1 0 t)
+;;    (ACCEPT-process-output process 1 0 t)
     process))
+
+(defun ertext/calc-rtext-and-pattern-key (rtext pattern)
+  ""
+  (format "%S@%S" pattern rtext))
 
 (defun ertext/connect-to-rtext-process (filename)
   "Launch the defined command for FILENAME."
-  (let ((found (ertext/get-rtext-and-pattern-and-command filename))
+  (let* ((found (ertext/get-rtext-and-pattern-and-command filename))
         (rtext (first found))
         (pattern (second found))
         (command (third found)))
     (if found
-        (let* ((process-and-port (ertext/start-rtext-process (second rtext-and-command)))
+        (let* ((process-and-port (ertext/start-rtext-process command))
+               (process (first process-and-port))
                (port (second process-and-port)))
-          (if port (ertext/connect-to-service port))))))
+          (if port
+              (list (ertext/calc-rtext-and-pattern-key rtext pattern)
+                    process
+                    (ertext/connect-to-service port)))))))
 
 (defun my-rtext-exists-p (filename) (string= (expand-file-name "/my/very/long/path/.rtext") filename))
 (defun my-rtext-match-p (rtext-config filename) (list "*.test" "command"))
@@ -276,25 +284,75 @@ associated with process."
   (desc "connection-get-json-data - too much data")
   (expect '(((\1 . 2)) "123") (ertext/protocol-get-json "7{\"1\":2}123"))
 
+  (desc "key calc for rtext and pattern")
+  (expect "pattern@file" (ertext/calc-rtext-and-pattern-key "file" "pattern"))
   )
 
-(defun ertext/get-process (buffer)
-  "Return the process responsible for rText for BUFFER"
-  (ertext/connect-to-rtext-process buffer)
-  )
+(defun ertext/get-process (filename)
+  "Return the process responsible for rText for FILENAME."
+  (let* ((found (ertext/get-rtext-and-pattern-and-command filename))
+         (rtext (first found))
+         (pattern (second found))
+         (key (ertext/calc-rtext-and-pattern-key rtext pattern))
+         (already-launched (gethash key ertext/rtextconfig-2-processes-map)))
+    (if already-launched (gethash :socket already-launched)
+      (let* ((launch-info (ertext/connect-to-rtext-process buffer))
+             (process (second launch-info))
+             (socket (third launch-info))
+             (res (make-hash-table :test 'equal))
+             (new-entry (make-hash-table :test 'equal)))
+        (puthash :process process new-entry)
+        (puthash :socket socket new-entry)
+        (puthash key new-entry ertext/rtextconfig-2-processes-map)
+        (ertext/load-model socket)
+        socket))))
 
-(defun ertext/navigate-to ()
-  "Navigate to the file rText says."
-  (interactive)
+(defun ertext/load-model(protocol)
+  "Sends a load_model request on communication channel PROTOCOL."
+  (ertext/send-request protocol
+   (list (cons "type" "request")
+         (cons "invocation_id" 6)
+         (cons "command" "load_model"))))
+
+(defun ertext/send-request(protocol request)
+  "Sends the REQUEST with PROTOCOL."
+  (process-send-string
+   protocol
+   (let* ((json (json-encode request))
+          (length (number-to-string (length json)))
+          (data (concat length json)))
+     (message "Sending: %s" data)
+     data)))
+
+(defun ertext/send-request-for-current-cursor(request)
+  "Gets context for current cursor position."
   (let* ((buffer (expand-file-name  (buffer-name)))
          (line (count-lines 1 (point)))
          (column (current-column))
          (process (ertext/get-process buffer))
          (context (ertext/context/get-from-current-buffer))
-         (json
-          (json-encode (list (cons "type" "request") (cons "invocation_id"  7) (cons "command" "link_targets") (cons "context" context) (cons "column" column)))))
-    (message "Context for %s:%d.%d -> %S\nContext:\n%S\njson:\n%S" buffer line column process context json)
-    (process-send-string process json)))
+         (json (list
+                (cons "type" "request")
+                (cons "invocation_id"  7)
+                (cons "command" request)
+                (cons "context" context)
+                (cons "column" column))))
+    (message "Context for %S:%d.%d -> %S\nContext:\n%S\njson:\n%S" buffer line column process context json)
+    (ertext/send-request process json)))
+
+
+(defun ertext/navigate-to ()
+  "Navigate to the file rText says."
+  (interactive)
+  (ertext/send-request-for-current-cursor "link_targets"))
+(defun ertext/context()
+  "Show context."
+  (interactive)
+  (ertext/send-request-for-current-cursor "context_info"))
+(defun ertext/content-complete()
+  "Show content complete."
+  (interactive)
+  (ertext/send-request-for-current-cursor "content_complete"))
 
 ;(let* ((test "abc") (json (json-encode '(("type" . "request") ("test" . 'test))))) json)
 ;
@@ -306,8 +364,14 @@ associated with process."
 ;(accept-process-output h 1 0 t)
 ;(sit-for 1)
 ;(waiting-for-user-input-p)
-;(mapc #'delete-process (process-list))
+;
 
+(defun ertext/reset()
+  "Clears ertext data."
+  (interactive)
+  (mapc #'delete-process (process-list))
+  (clrhash ertext/rtextconfig-2-processes-map))
+(ertext/reset)
 ;; json tests
 ;;(require 'json)
 ;;(setq h (json-read-from-string "{\"type\": [\"1\", 2, 3],\"command\": \"load_model\"}"))
