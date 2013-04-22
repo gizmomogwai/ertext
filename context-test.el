@@ -8,9 +8,9 @@
   (or (eq 0 (length string))
       (eq (elt string 0) ?#)))
 
-;; (defun ertext/context/remove-ignored-lines (lines)
-;;   "Remove all ignored lines from the list of lines."
-;;   (remove-if 'ertext/context/ignore-line-p lines))
+(defun ertext/context/remove-ignored-lines (lines)
+  "Remove all ignored lines from the list of lines."
+  (remove-if 'ertext/context/ignore-line-p lines))
 
 (defun ertext/context/trim (string)
   "Remove whitespace from the start and end of a string."

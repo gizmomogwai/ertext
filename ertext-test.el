@@ -4,6 +4,7 @@
 ;;(require 'ertext)
 (require 'ert-expectations)
 (require 'json)
+(require 'completion-ui)
 
 (defvar ertext/service-regex "RText service, listening on port \\(.*\\)\n"
   "Regex used for finding the communication port of a RText service.")
@@ -150,7 +151,7 @@ associated with process."
 
 (defun ertext/protocol-json-response-received (process json)
   "Called whenever a json response is received."
-  (message "%S got %S" process json))
+  (message "%s got %s" process (json-read-from-string json)))
 
 (defun ertext/connect-to-service (port)
   "Connect to a RText service that is listening on PORT."
@@ -166,7 +167,7 @@ associated with process."
 
 (defun ertext/calc-rtext-and-pattern-key (rtext pattern)
   ""
-  (format "%S@%S" pattern rtext))
+  (format "%s@%s" pattern rtext))
 
 (defun ertext/connect-to-rtext-process (filename)
   "Launch the defined command for FILENAME."
@@ -286,7 +287,25 @@ associated with process."
 
   (desc "key calc for rtext and pattern")
   (expect "pattern@file" (ertext/calc-rtext-and-pattern-key "file" "pattern"))
+
+  (desc "get completion candidates from answer")
+  (expect (list "EAnnotation" "EClass" "EClassifier")
+    (ertext/response-to-completion-candidates
+     '((invocation_id . 7)
+       (type . "response")
+       (options . [((display . "EAnnotation ") (insert . "EAnnotation")) ((display . "EClass <name>") (insert . "EClass")) ((display . "EClassifier <name>") (insert . "EClassifier"))]))))
+
   )
+
+(defun ertext/response-to-completion-candidates (response)
+  "Convert the response to a list of strings used for completion."
+  (let* ((options (cdr (assoc 'options response)))
+         (type (cdr (assoc 'type response)))
+         (invocation (cdr (assoc 'invocation_id response))))
+    (setq o options)
+    (if (string-equal type "response")
+        (mapcar 'car (mapcar 'car options)))))
+      (mapcar 'cdr ((mapcar 'car (mapcar 'cdr options)))
 
 (defun ertext/get-process (filename)
   "Return the process responsible for rText for FILENAME."
