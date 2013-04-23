@@ -302,10 +302,8 @@ associated with process."
   (let* ((options (cdr (assoc 'options response)))
          (type (cdr (assoc 'type response)))
          (invocation (cdr (assoc 'invocation_id response))))
-    (setq o options)
     (if (string-equal type "response")
-        (mapcar 'car (mapcar 'car options)))))
-      (mapcar 'cdr ((mapcar 'car (mapcar 'cdr options)))
+        (mapcar 'cdr  (mapcar 'car (mapcar 'cdr options))))))
 
 (defun ertext/get-process (filename)
   "Return the process responsible for rText for FILENAME."
